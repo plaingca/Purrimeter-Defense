@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # Main backend service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: purrimeter-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - ./recordings:/app/recordings
+      - ./models:/app/models
+      - huggingface_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://purrimeter:purrimeter@postgres:5432/purrimeter
+      - CUDA_VISIBLE_DEVICES=0
+      # These can be overridden in .env
+      - HF_TOKEN=${HF_TOKEN:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - KASA_DEVICE_IP=${KASA_DEVICE_IP:-}
+      - RECORDING_PRE_ROLL_SECONDS=${RECORDING_PRE_ROLL_SECONDS:-5}
+      - RECORDING_POST_ROLL_SECONDS=${RECORDING_POST_ROLL_SECONDS:-3}
+      - RECORDINGS_PATH=/app/recordings
+      - DETECTION_SAMPLE_RATE=${DETECTION_SAMPLE_RATE:-0.5}
+      - MJPEG_FPS=${MJPEG_FPS:-10}
+    depends_on:
+      - redis
+      - postgres
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - purrimeter-net
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: purrimeter-frontend
+    ports:
+      - "3001:3000"  # Using 3001 externally to avoid conflict
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    env_file:
+      - .env
+    environment:
+      # These must be set explicitly - nested substitution doesn't work
+      - VITE_API_URL=http://${HOST_DOMAIN:-localhost}:8000
+      - VITE_WS_URL=ws://${HOST_DOMAIN:-localhost}:8000
+      - VITE_HOST_DOMAIN=${HOST_DOMAIN:-localhost}
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - purrimeter-net
+
+  # Redis for pub/sub and caching
+  redis:
+    image: redis:7-alpine
+    container_name: purrimeter-redis
+    ports:
+      - "6380:6379"  # Using 6380 externally to avoid conflict
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - purrimeter-net
+
+  # PostgreSQL for persistent storage
+  postgres:
+    image: postgres:15-alpine
+    container_name: purrimeter-postgres
+    ports:
+      - "5433:5432"  # Using 5433 externally to avoid conflict
+    environment:
+      - POSTGRES_USER=purrimeter
+      - POSTGRES_PASSWORD=purrimeter
+      - POSTGRES_DB=purrimeter
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - purrimeter-net
+
+volumes:
+  redis_data:
+  postgres_data:
+  huggingface_cache:
+
+networks:
+  purrimeter-net:
+    driver: bridge
+

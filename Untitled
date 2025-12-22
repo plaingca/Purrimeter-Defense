@@ -1,0 +1,10 @@
+# ===================
+# Tapo Camera Speaker
+# ===================
+# Use the built-in speaker on your Tapo camera to play sounds
+# IP address of your Tapo camera
+TAPO_CAMERA_IP=192.168.1.101
+# Camera account username (set in Tapo app: Settings > Advanced Settings > Camera Account)
+TAPO_CAMERA_USER=admin
+# Camera account password
+TAPO_CAMERA_PASSWORD=your_camera_password

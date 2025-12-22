@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-pattern: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 5 L35 15 L25 15 Z' fill='%23ffffff08'/%3E%3Ccircle cx='10' cy='40' r='3' fill='%23ffffff05'/%3E%3Ccircle cx='50' cy='45' r='2' fill='%23ffffff05'/%3E%3C/svg%3E");
+}
+
+body {
+  @apply bg-midnight-950 text-gray-100 font-display;
+  background-image: var(--bg-pattern);
+  background-attachment: fixed;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  @apply w-2;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-midnight-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-purrple-600 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-purrple-500;
+}
+
+/* Custom utilities */
+@layer utilities {
+  .glass {
+    @apply bg-midnight-900/80 backdrop-blur-md border border-midnight-700/50;
+  }
+  
+  .glass-card {
+    @apply glass rounded-2xl shadow-lg;
+  }
+  
+  .gradient-text {
+    @apply bg-gradient-to-r from-purrple-400 to-purrple-600 bg-clip-text text-transparent;
+  }
+  
+  .btn-primary {
+    @apply px-6 py-3 bg-gradient-to-r from-purrple-500 to-purrple-600 
+           text-white font-semibold rounded-xl shadow-glow
+           hover:from-purrple-400 hover:to-purrple-500
+           active:scale-95 transition-all duration-200;
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-3 bg-midnight-800 border border-midnight-600
+           text-gray-200 font-semibold rounded-xl
+           hover:bg-midnight-700 hover:border-purrple-500/50
+           active:scale-95 transition-all duration-200;
+  }
+  
+  .btn-danger {
+    @apply px-6 py-3 bg-alert-red/20 border border-alert-red/50
+           text-alert-red font-semibold rounded-xl
+           hover:bg-alert-red/30 hover:border-alert-red
+           active:scale-95 transition-all duration-200;
+  }
+  
+  .input-field {
+    @apply w-full px-4 py-3 bg-midnight-800 border border-midnight-600
+           rounded-xl text-gray-100 placeholder-gray-500
+           focus:outline-none focus:ring-2 focus:ring-purrple-500/50 focus:border-purrple-500
+           transition-all duration-200;
+  }
+  
+  .video-feed {
+    @apply rounded-xl overflow-hidden bg-midnight-900 
+           border-2 border-midnight-700 shadow-lg;
+  }
+  
+  .video-feed.alert-active {
+    @apply border-alert-red shadow-glow-alert animate-alert-flash;
+  }
+  
+  .detection-overlay {
+    @apply absolute inset-0 pointer-events-none;
+  }
+  
+  .detection-box {
+    @apply absolute border-2 border-purrple-400 bg-purrple-400/10 rounded;
+  }
+  
+  .detection-label {
+    @apply absolute -top-6 left-0 px-2 py-0.5 bg-purrple-500 
+           text-white text-xs font-mono rounded;
+  }
+}
+
+/* Cat paw cursor for buttons */
+.paw-cursor {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='16' r='5' fill='%23f19333'/%3E%3Ccircle cx='7' cy='10' r='3' fill='%23f19333'/%3E%3Ccircle cx='17' cy='10' r='3' fill='%23f19333'/%3E%3Ccircle cx='5' cy='15' r='2.5' fill='%23f19333'/%3E%3Ccircle cx='19' cy='15' r='2.5' fill='%23f19333'/%3E%3C/svg%3E") 12 12, pointer;
+}
+
+/* Alert banner animation */
+@keyframes slide-in-top {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.alert-banner {
+  animation: slide-in-top 0.3s ease-out;
+}
+
+/* Video grid layout */
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .video-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

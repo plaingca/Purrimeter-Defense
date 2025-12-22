@@ -11,6 +11,7 @@ import structlog
 
 from backend.database import Rule, RuleConditionType, Alert, AlertState
 from backend.services.sam3_service import SAM3Service, Detection
+from backend.config import settings
 
 logger = structlog.get_logger()
 
@@ -33,7 +34,7 @@ class RuleState:
     current_alert_id: Optional[str] = None
     is_in_alert: bool = False
     consecutive_detections: int = 0
-    required_consecutive: int = 2  # Require 2 consecutive detections to trigger
+    required_consecutive: int = 1  # Require N consecutive detections to trigger (1 = instant)
 
 
 class RuleEngine:
@@ -55,8 +56,11 @@ class RuleEngine:
     
     def register_rule(self, rule: Rule):
         """Register a rule for evaluation."""
-        self._rule_states[rule.id] = RuleState(rule=rule)
-        logger.info("Rule registered", rule_id=rule.id, name=rule.name)
+        self._rule_states[rule.id] = RuleState(
+            rule=rule,
+            required_consecutive=settings.DETECTION_CONSECUTIVE_FRAMES,
+        )
+        logger.info("Rule registered", rule_id=rule.id, name=rule.name, required_consecutive=settings.DETECTION_CONSECUTIVE_FRAMES)
     
     def unregister_rule(self, rule_id: str):
         """Unregister a rule and clear any active alert."""

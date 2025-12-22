@@ -186,8 +186,15 @@ async def get_detection_events(
     # Default to last 7 days if no date range specified
     if not date_from:
         date_from = datetime.utcnow() - timedelta(days=7)
+    else:
+        # Strip timezone info to make naive datetime (database uses naive UTC)
+        date_from = date_from.replace(tzinfo=None) if date_from.tzinfo else date_from
+    
     if not date_to:
         date_to = datetime.utcnow()
+    else:
+        # Strip timezone info to make naive datetime (database uses naive UTC)
+        date_to = date_to.replace(tzinfo=None) if date_to.tzinfo else date_to
     
     # Build query with eager loading of relationships
     query = (

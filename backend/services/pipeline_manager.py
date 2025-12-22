@@ -226,11 +226,12 @@ class PipelineManager:
                     await asyncio.sleep(sample_interval)
                     continue
                 
-                # Run detection
+                # Run detection (pass camera_id for streaming session)
                 detections = await self.sam3_service.detect_objects(
                     pil_image,
                     list(targets),
                     confidence_threshold=settings.DETECTION_CONFIDENCE_THRESHOLD,
+                    camera_id=pipeline.camera_id,
                 )
                 
                 pipeline.last_detection_time = datetime.utcnow()

@@ -768,15 +768,34 @@ function EventDetailModal({ event, onClose }) {
               <div className="mt-4">
                 <div className="text-gray-500 text-sm mb-2">Detected Objects</div>
                 <div className="flex flex-wrap gap-2">
-                  {event.detected_objects.map((obj, i) => (
-                    <span 
-                      key={i}
-                      className="px-2 py-1 bg-purrple-500/20 text-purrple-400 text-sm rounded"
-                    >
-                      {obj.label || obj.class_name || obj} 
-                      {obj.confidence && ` (${(obj.confidence * 100).toFixed(0)}%)`}
-                    </span>
-                  ))}
+                  {event.detected_objects.map((obj, i) => {
+                    // Handle spatial relationship objects (primary/secondary)
+                    if (obj.primary && obj.secondary) {
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="px-2 py-1 bg-purrple-500/20 text-purrple-400 text-sm rounded">
+                            {obj.primary.label} ({(obj.primary.confidence * 100).toFixed(0)}%)
+                          </span>
+                          <span className="text-gray-500 text-sm">{obj.relationship || '→'}</span>
+                          <span className="px-2 py-1 bg-catblue-500/20 text-catblue-400 text-sm rounded">
+                            {obj.secondary.label} ({(obj.secondary.confidence * 100).toFixed(0)}%)
+                          </span>
+                        </div>
+                      )
+                    }
+                    // Handle simple detection objects
+                    const label = obj.label || obj.class_name || 'object'
+                    const confidence = obj.confidence
+                    return (
+                      <span 
+                        key={i}
+                        className="px-2 py-1 bg-purrple-500/20 text-purrple-400 text-sm rounded"
+                      >
+                        {label}
+                        {confidence && ` (${(confidence * 100).toFixed(0)}%)`}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             )}

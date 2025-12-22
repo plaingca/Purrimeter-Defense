@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Detection settings
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
     DETECTION_SAMPLE_RATE: float = 0.5  # Samples per second (1 every 2 seconds to reduce GPU load)
+    DETECTION_CONSECUTIVE_FRAMES: int = 1  # Consecutive detections required to trigger alert (1 = instant)
     
     # Discord
     DISCORD_WEBHOOK_URL: Optional[str] = None

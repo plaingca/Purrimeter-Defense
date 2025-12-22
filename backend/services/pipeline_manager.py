@@ -16,7 +16,7 @@ from backend.services.camera_stream import CameraStream, TimestampedFrame
 from backend.services.recording_service import RecordingService
 from backend.services.rule_engine import RuleEngine, RuleEvaluation
 from backend.services.action_service import ActionService
-from backend.database import Rule, Camera
+from backend.database import Rule, Camera, Alert, AlertState, Recording, AsyncSessionLocal
 
 logger = structlog.get_logger()
 
@@ -283,6 +283,25 @@ class PipelineManager:
         if not pipeline:
             return
         
+        # Save alert to database
+        try:
+            async with AsyncSessionLocal() as session:
+                alert = Alert(
+                    id=alert_id,
+                    camera_id=rule.camera_id,
+                    rule_id=rule.id,
+                    state=AlertState.TRIGGERED,
+                    message=evaluation.message,
+                    detected_objects=evaluation.detected_objects,
+                    detection_confidence=evaluation.confidence,
+                    triggered_at=datetime.utcnow(),
+                )
+                session.add(alert)
+                await session.commit()
+                logger.info("Alert saved to database", alert_id=alert_id)
+        except Exception as e:
+            logger.error("Failed to save alert to database", error=str(e))
+        
         # Start recording
         try:
             recording_id = await self.recording_service.start_recording(
@@ -290,6 +309,18 @@ class PipelineManager:
                 alert_id,
             )
             pipeline.active_alerts[alert_id] = recording_id
+            
+            # Update alert state to recording
+            try:
+                async with AsyncSessionLocal() as session:
+                    from sqlalchemy import select
+                    result = await session.execute(select(Alert).where(Alert.id == alert_id))
+                    alert = result.scalar_one_or_none()
+                    if alert:
+                        alert.state = AlertState.RECORDING
+                        await session.commit()
+            except Exception as e:
+                logger.error("Failed to update alert state", error=str(e))
             
             logger.info(
                 "Recording started",
@@ -326,6 +357,8 @@ class PipelineManager:
         
         # Stop recording
         recording_id = pipeline.active_alerts.pop(alert_id, None)
+        discord_sent = False
+        
         if recording_id:
             try:
                 recording_info = await self.recording_service.stop_recording(
@@ -340,16 +373,54 @@ class PipelineManager:
                     )
                     
                     # Send to Discord
-                    await self.action_service.execute_action(
+                    discord_result = await self.action_service.execute_action(
                         "discord_video_upload",
                         {
                             "video_path": recording_info["filepath"],
                             "message": f"🎬 Recording from alert: {rule.name}",
                         },
                     )
+                    discord_sent = discord_result.success if discord_result else False
+                    
+                    # Save recording to database
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            from pathlib import Path
+                            recording = Recording(
+                                id=recording_id,
+                                camera_id=rule.camera_id,
+                                alert_id=alert_id,
+                                filename=recording_info.get("filename", ""),
+                                filepath=recording_info.get("filepath", ""),
+                                duration_seconds=recording_info.get("duration_seconds"),
+                                file_size_bytes=recording_info.get("file_size_bytes"),
+                                thumbnail_path=recording_info.get("thumbnail_path"),
+                                started_at=datetime.fromisoformat(recording_info.get("started_at", datetime.utcnow().isoformat())),
+                                ended_at=datetime.fromisoformat(recording_info.get("ended_at", datetime.utcnow().isoformat())),
+                                discord_sent=discord_sent,
+                            )
+                            session.add(recording)
+                            await session.commit()
+                            logger.info("Recording saved to database", recording_id=recording_id)
+                    except Exception as e:
+                        logger.error("Failed to save recording to database", error=str(e))
                     
             except Exception as e:
                 logger.error("Failed to stop recording", error=str(e))
+        
+        # Update alert state to cooldown/idle and set ended_at
+        try:
+            async with AsyncSessionLocal() as session:
+                from sqlalchemy import select
+                result = await session.execute(select(Alert).where(Alert.id == alert_id))
+                alert = result.scalar_one_or_none()
+                if alert:
+                    alert.state = AlertState.COOLDOWN
+                    alert.ended_at = datetime.utcnow()
+                    await session.commit()
+                    logger.info("Alert updated in database", alert_id=alert_id, state="cooldown")
+        except Exception as e:
+            logger.error("Failed to update alert in database", error=str(e))
         
         # Execute on_alert_end actions
         if rule.on_alert_end_actions:

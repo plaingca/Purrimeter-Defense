@@ -446,6 +446,8 @@ class PipelineManager:
             "camera_id": camera_id,
             "is_running": pipeline.is_running,
             "stream_running": pipeline.camera_stream.is_running,
+            "stream_status": pipeline.camera_stream.status.value,
+            "reconnect_attempts": pipeline.camera_stream.reconnect_attempts,
             "frame_count": pipeline.camera_stream.frame_count,
             "last_detection_time": (
                 pipeline.last_detection_time.isoformat()

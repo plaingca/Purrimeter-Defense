@@ -1,80 +1,148 @@
 import { create } from 'zustand'
 import { WS_URL } from '../config'
 
+// WebSocket reconnection configuration
+const WS_RECONNECT_CONFIG = {
+  initialDelay: 1000,      // 1 second
+  maxDelay: 30000,         // 30 seconds max
+  backoffFactor: 1.5,      // Exponential backoff multiplier
+  maxAttempts: Infinity,   // Keep trying forever
+}
+
+// Module-level state for reconnection (outside of Zustand to avoid issues)
+let reconnectAttempts = 0
+let reconnectTimeoutId = null
+let shouldReconnect = true
+
 export const useAlertStore = create((set, get) => ({
   // Connection state
   connected: false,
+  reconnecting: false,
   socket: null,
   
   // Active alerts
   activeAlerts: [],
   alertHistory: [],
   
+  // Calculate reconnect delay with exponential backoff
+  _getReconnectDelay: () => {
+    const delay = Math.min(
+      WS_RECONNECT_CONFIG.initialDelay * Math.pow(WS_RECONNECT_CONFIG.backoffFactor, reconnectAttempts),
+      WS_RECONNECT_CONFIG.maxDelay
+    )
+    return delay
+  },
+  
   // Connect to WebSocket
   connect: () => {
-    if (get().socket) return
+    const state = get()
+    if (state.socket && state.socket.readyState === WebSocket.OPEN) return
     
-    const socket = new WebSocket(`${WS_URL}/api/streams/alerts`)
-    
-    socket.onopen = () => {
-      console.log('🐱 Alert WebSocket connected')
-      set({ connected: true, socket })
+    // Clear any pending reconnection
+    if (reconnectTimeoutId) {
+      clearTimeout(reconnectTimeoutId)
+      reconnectTimeoutId = null
     }
     
-    socket.onclose = () => {
-      console.log('🐱 Alert WebSocket disconnected')
-      set({ connected: false, socket: null })
+    shouldReconnect = true
+    
+    try {
+      const socket = new WebSocket(`${WS_URL}/api/streams/alerts`)
       
-      // Reconnect after delay
-      setTimeout(() => get().connect(), 5000)
-    }
-    
-    socket.onerror = (error) => {
-      console.error('Alert WebSocket error:', error)
-    }
-    
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data)
+      socket.onopen = () => {
+        console.log('🐱 Alert WebSocket connected')
+        reconnectAttempts = 0
+        set({ connected: true, reconnecting: false, socket })
+      }
       
-      if (data.type === 'alert_triggered') {
-        // Add to active alerts
-        set(state => ({
-          activeAlerts: [...state.activeAlerts, {
-            id: data.alert_id,
-            ruleId: data.rule_id,
-            ruleName: data.rule_name,
-            cameraId: data.camera_id,
-            message: data.message,
-            confidence: data.confidence,
-            detectedObjects: data.detected_objects,
-            triggeredAt: new Date(),
-          }],
-          alertHistory: [{
-            ...data,
-            triggeredAt: new Date(),
-          }, ...state.alertHistory.slice(0, 99)],
-        }))
+      socket.onclose = (event) => {
+        console.log('🐱 Alert WebSocket disconnected', event.code, event.reason)
+        set({ connected: false, socket: null })
         
-        // Play alert sound
-        playAlertSound()
-        
-      } else if (data.type === 'alert_ended') {
-        // Remove from active alerts
-        set(state => ({
-          activeAlerts: state.activeAlerts.filter(a => a.id !== data.alert_id),
-        }))
+        // Attempt to reconnect if we should
+        if (shouldReconnect && reconnectAttempts < WS_RECONNECT_CONFIG.maxAttempts) {
+          const delay = get()._getReconnectDelay()
+          reconnectAttempts += 1
+          set({ reconnecting: true })
+          
+          console.log(`🐱 Alert WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`)
+          reconnectTimeoutId = setTimeout(() => get().connect(), delay)
+        }
+      }
+      
+      socket.onerror = (error) => {
+        console.error('🐱 Alert WebSocket error:', error)
+      }
+      
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          // Handle ping/pong keepalive
+          if (data.type === 'ping') {
+            return
+          }
+          
+          if (data.type === 'alert_triggered') {
+            // Add to active alerts
+            set(state => ({
+              activeAlerts: [...state.activeAlerts, {
+                id: data.alert_id,
+                ruleId: data.rule_id,
+                ruleName: data.rule_name,
+                cameraId: data.camera_id,
+                message: data.message,
+                confidence: data.confidence,
+                detectedObjects: data.detected_objects,
+                triggeredAt: new Date(),
+              }],
+              alertHistory: [{
+                ...data,
+                triggeredAt: new Date(),
+              }, ...state.alertHistory.slice(0, 99)],
+            }))
+            
+            // Play alert sound
+            playAlertSound()
+            
+          } else if (data.type === 'alert_ended') {
+            // Remove from active alerts
+            set(state => ({
+              activeAlerts: state.activeAlerts.filter(a => a.id !== data.alert_id),
+            }))
+          }
+        } catch (e) {
+          console.error('🐱 Alert WebSocket message parse error:', e)
+        }
+      }
+      
+      set({ socket })
+    } catch (e) {
+      console.error('🐱 Alert WebSocket connection error:', e)
+      // Schedule reconnection on error
+      if (shouldReconnect) {
+        const delay = get()._getReconnectDelay()
+        reconnectAttempts += 1
+        set({ reconnecting: true })
+        reconnectTimeoutId = setTimeout(() => get().connect(), delay)
       }
     }
-    
-    set({ socket })
   },
   
   // Disconnect
   disconnect: () => {
+    shouldReconnect = false
+    reconnectAttempts = 0
+    
+    if (reconnectTimeoutId) {
+      clearTimeout(reconnectTimeoutId)
+      reconnectTimeoutId = null
+    }
+    
     const { socket } = get()
     if (socket) {
       socket.close()
-      set({ socket: null, connected: false })
+      set({ socket: null, connected: false, reconnecting: false })
     }
   },
   

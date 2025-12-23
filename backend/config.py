@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     RECORDING_POST_ROLL_SECONDS: int = 3
     RECORDING_FPS: int = 15
     RECORDING_MAX_DURATION_SECONDS: int = 300  # 5 minutes max
+    RECORDING_INCLUDE_AUDIO: bool = True  # Record audio from RTSP stream
     
     # Frame buffer for pre-roll (ring buffer size)
     FRAME_BUFFER_SIZE: int = 150  # 5 seconds at 30fps

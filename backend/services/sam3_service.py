@@ -662,11 +662,40 @@ class SAM3Service:
         b_x1, b_y1, b_x2, b_y2 = object_b.bbox
         
         if relationship == "over":
+            # "Over" means object_a is physically on top of object_b
+            # In image coordinates: Y=0 is top, Y=height is bottom
+            # So "on top" means object_a should be in the UPPER portion of object_b
+            
             a_center_x, a_center_y = object_a.center
+            b_center_y = (b_y1 + b_y2) // 2
+            b_height = b_y2 - b_y1
+            
+            # Check horizontal overlap (cat center is within counter's x-range)
             horizontal_overlap = b_x1 <= a_center_x <= b_x2
-            vertical_position = a_y2 >= b_y1 - 50
+            
+            # Check if cat is in the TOP HALF of the counter's bounding box
+            # Cat center should be above the counter's vertical midpoint
+            # Add some tolerance (20% of counter height below midpoint)
+            vertical_threshold = b_center_y + int(b_height * 0.2)
+            cat_in_top_portion = a_center_y <= vertical_threshold
+            
+            # Check mask overlap (most reliable - means cat is actually touching counter)
             mask_overlap = np.sum(object_a.mask & object_b.mask) > 0
-            return horizontal_overlap and (vertical_position or mask_overlap)
+            
+            is_over = horizontal_overlap and (cat_in_top_portion or mask_overlap)
+            
+            logger.debug(
+                "Spatial 'over' check",
+                cat_center_y=a_center_y,
+                counter_center_y=b_center_y,
+                vertical_threshold=vertical_threshold,
+                cat_in_top_portion=cat_in_top_portion,
+                mask_overlap=mask_overlap,
+                horizontal_overlap=horizontal_overlap,
+                result=is_over,
+            )
+            
+            return is_over
             
         elif relationship == "on":
             return np.sum(object_a.mask & object_b.mask) > 0

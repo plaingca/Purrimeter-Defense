@@ -1,5 +1,7 @@
 """
 Camera stream handling with frame buffer for recordings.
+
+Includes automatic reconnection and recovery from RTSP stream loss.
 """
 
 import asyncio
@@ -7,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Callable, AsyncIterator, Deque
+from enum import Enum
 import threading
 import time
 import structlog
@@ -17,6 +20,15 @@ from PIL import Image
 from backend.config import settings
 
 logger = structlog.get_logger()
+
+
+class StreamStatus(str, Enum):
+    """Status of the camera stream connection."""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    RECONNECTING = "reconnecting"
+    ERROR = "error"
 
 
 @dataclass
@@ -34,6 +46,8 @@ class CameraStream:
     
     Maintains a ring buffer of recent frames for pre-roll capability,
     and provides async iteration over frames.
+    
+    Features automatic reconnection on stream loss with exponential backoff.
     """
     camera_id: str
     rtsp_url: str
@@ -41,6 +55,12 @@ class CameraStream:
     fps: int = 30
     width: int = 1920
     height: int = 1080
+    
+    # Reconnection settings
+    max_consecutive_failures: int = 10  # Failures before attempting reconnect
+    initial_reconnect_delay: float = 1.0  # Initial delay in seconds
+    max_reconnect_delay: float = 30.0  # Maximum delay between reconnection attempts
+    reconnect_backoff_factor: float = 2.0  # Exponential backoff multiplier
     
     # Internal state
     _capture: Optional[cv2.VideoCapture] = field(default=None, repr=False)
@@ -52,27 +72,61 @@ class CameraStream:
     _read_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _subscribers: list = field(default_factory=list, repr=False)
     
+    # Connection state tracking
+    _status: StreamStatus = field(default=StreamStatus.DISCONNECTED, repr=False)
+    _consecutive_failures: int = field(default=0, repr=False)
+    _reconnect_attempts: int = field(default=0, repr=False)
+    _last_successful_read: Optional[float] = field(default=None, repr=False)
+    _status_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    
     def __post_init__(self):
         # Initialize frame buffer with configured size
         self._frame_buffer = deque(maxlen=settings.FRAME_BUFFER_SIZE)
     
-    async def start(self) -> bool:
-        """Start the camera stream."""
-        if self._running:
-            return True
-            
-        logger.info("Starting camera stream", camera_id=self.camera_id, url=self.rtsp_url)
-        
+    def _set_status(self, status: StreamStatus):
+        """Thread-safe status update."""
+        with self._status_lock:
+            if self._status != status:
+                old_status = self._status
+                self._status = status
+                logger.info(
+                    "Camera stream status changed",
+                    camera_id=self.camera_id,
+                    old_status=old_status.value,
+                    new_status=status.value,
+                )
+    
+    @property
+    def status(self) -> StreamStatus:
+        """Get current connection status."""
+        with self._status_lock:
+            return self._status
+    
+    @property
+    def reconnect_attempts(self) -> int:
+        """Get number of reconnection attempts since last successful connection."""
+        return self._reconnect_attempts
+    
+    def _open_capture(self) -> bool:
+        """Open the RTSP capture. Returns True on success."""
         try:
-            # Open RTSP stream
+            # Release existing capture if any
+            if self._capture is not None:
+                try:
+                    self._capture.release()
+                except Exception:
+                    pass
+                self._capture = None
+            
+            # Open RTSP stream with timeout settings
             self._capture = cv2.VideoCapture(self.rtsp_url)
             
             if not self._capture.isOpened():
                 logger.error("Failed to open camera stream", camera_id=self.camera_id)
                 return False
             
-            # Configure capture
-            self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
+            # Configure capture for lower latency
+            self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
             # Get actual dimensions
             actual_width = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -87,7 +141,32 @@ class CameraStream:
                 fps=actual_fps,
             )
             
+            # Reset failure counters on successful connection
+            self._consecutive_failures = 0
+            self._reconnect_attempts = 0
+            self._last_successful_read = time.time()
+            
+            return True
+            
+        except Exception as e:
+            logger.error("Error opening camera stream", camera_id=self.camera_id, error=str(e))
+            return False
+    
+    async def start(self) -> bool:
+        """Start the camera stream."""
+        if self._running:
+            return True
+        
+        self._set_status(StreamStatus.CONNECTING)
+        logger.info("Starting camera stream", camera_id=self.camera_id, url=self.rtsp_url)
+        
+        try:
+            if not self._open_capture():
+                self._set_status(StreamStatus.ERROR)
+                return False
+            
             self._running = True
+            self._set_status(StreamStatus.CONNECTED)
             
             # Start frame reading thread
             self._read_thread = threading.Thread(
@@ -101,29 +180,90 @@ class CameraStream:
             
         except Exception as e:
             logger.error("Error starting camera stream", camera_id=self.camera_id, error=str(e))
+            self._set_status(StreamStatus.ERROR)
             return False
     
     async def stop(self):
         """Stop the camera stream."""
         logger.info("Stopping camera stream", camera_id=self.camera_id)
         self._running = False
+        self._set_status(StreamStatus.DISCONNECTED)
         
         if self._read_thread:
             self._read_thread.join(timeout=5.0)
             
         if self._capture:
-            self._capture.release()
+            try:
+                self._capture.release()
+            except Exception:
+                pass
             self._capture = None
         
         self._frame_buffer.clear()
+        self._consecutive_failures = 0
+        self._reconnect_attempts = 0
         logger.info("Camera stream stopped", camera_id=self.camera_id)
     
+    def _reconnect(self) -> bool:
+        """
+        Attempt to reconnect to the RTSP stream with exponential backoff.
+        
+        Returns True if reconnection successful, False otherwise.
+        """
+        self._set_status(StreamStatus.RECONNECTING)
+        self._reconnect_attempts += 1
+        
+        # Calculate delay with exponential backoff
+        delay = min(
+            self.initial_reconnect_delay * (self.reconnect_backoff_factor ** (self._reconnect_attempts - 1)),
+            self.max_reconnect_delay
+        )
+        
+        logger.info(
+            "Attempting to reconnect camera stream",
+            camera_id=self.camera_id,
+            attempt=self._reconnect_attempts,
+            delay_seconds=delay,
+        )
+        
+        # Wait before reconnecting
+        time.sleep(delay)
+        
+        # Check if we should still be running
+        if not self._running:
+            return False
+        
+        # Attempt to reconnect
+        if self._open_capture():
+            self._set_status(StreamStatus.CONNECTED)
+            logger.info(
+                "Camera stream reconnected successfully",
+                camera_id=self.camera_id,
+                attempts=self._reconnect_attempts,
+            )
+            return True
+        else:
+            self._set_status(StreamStatus.RECONNECTING)
+            return False
+    
     def _read_frames_loop(self):
-        """Background thread that continuously reads frames."""
+        """
+        Background thread that continuously reads frames.
+        
+        Includes automatic reconnection on stream loss.
+        """
         frame_interval = 1.0 / self.fps
         last_frame_time = 0
         
-        while self._running and self._capture and self._capture.isOpened():
+        while self._running:
+            # Check if capture is valid
+            if self._capture is None or not self._capture.isOpened():
+                if self._running:
+                    if not self._reconnect():
+                        continue  # Retry reconnection
+                else:
+                    break
+            
             current_time = time.time()
             
             # Rate limit frame reading
@@ -131,13 +271,38 @@ class CameraStream:
                 time.sleep(0.001)
                 continue
             
-            ret, frame = self._capture.read()
+            try:
+                ret, frame = self._capture.read()
+            except Exception as e:
+                logger.error("Exception reading frame", camera_id=self.camera_id, error=str(e))
+                ret = False
+                frame = None
             
-            if not ret:
-                logger.warning("Failed to read frame", camera_id=self.camera_id)
-                # Try to reconnect
-                time.sleep(1.0)
+            if not ret or frame is None:
+                self._consecutive_failures += 1
+                
+                if self._consecutive_failures >= self.max_consecutive_failures:
+                    logger.warning(
+                        "Too many consecutive frame read failures, attempting reconnect",
+                        camera_id=self.camera_id,
+                        failures=self._consecutive_failures,
+                    )
+                    self._consecutive_failures = 0
+                    
+                    if not self._reconnect():
+                        continue  # Retry reconnection
+                else:
+                    # Brief sleep before retrying
+                    time.sleep(0.1)
                 continue
+            
+            # Successful read - reset failure counter
+            self._consecutive_failures = 0
+            self._last_successful_read = time.time()
+            
+            # Ensure we're marked as connected
+            if self.status != StreamStatus.CONNECTED:
+                self._set_status(StreamStatus.CONNECTED)
             
             last_frame_time = current_time
             self._frame_count += 1

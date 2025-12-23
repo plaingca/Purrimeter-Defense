@@ -7,7 +7,8 @@ import {
   Bell, 
   Wifi, 
   WifiOff,
-  Home
+  Home,
+  RefreshCw
 } from 'lucide-react'
 import { useAlertStore } from '../stores/alertStore'
 import AlertBanner from './AlertBanner'
@@ -22,7 +23,7 @@ const navItems = [
 ]
 
 export default function Layout() {
-  const { connected, activeAlerts } = useAlertStore()
+  const { connected, reconnecting, activeAlerts } = useAlertStore()
   
   return (
     <div className="min-h-screen flex">
@@ -73,7 +74,12 @@ export default function Layout() {
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm text-gray-400">Status</span>
               <div className="flex items-center gap-2">
-                {connected ? (
+                {reconnecting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 text-yellow-500 animate-spin" />
+                    <span className="text-xs text-yellow-500">Reconnecting</span>
+                  </>
+                ) : connected ? (
                   <>
                     <Wifi className="w-4 h-4 text-alert-green" />
                     <span className="text-xs text-alert-green">Connected</span>

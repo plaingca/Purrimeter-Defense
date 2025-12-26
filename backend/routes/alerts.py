@@ -264,6 +264,8 @@ async def get_detection_events(
                 "duration_seconds": rec.duration_seconds,
                 "file_size_bytes": rec.file_size_bytes,
                 "thumbnail_path": rec.thumbnail_path,
+                "mask_thumbnail_path": rec.mask_thumbnail_path,
+                "mask_video_path": rec.mask_video_path,
                 "discord_sent": rec.discord_sent,
             }
         

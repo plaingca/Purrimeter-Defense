@@ -16,9 +16,11 @@ import {
   Shield,
   TrendingUp,
   Eye,
+  EyeOff,
   Search,
   BarChart3,
-  Cat
+  Cat,
+  Crosshair
 } from 'lucide-react'
 import { format, formatDistanceToNow, subDays, startOfDay, endOfDay, parseISO } from 'date-fns'
 import clsx from 'clsx'
@@ -524,6 +526,8 @@ function StatCard({ icon: Icon, label, value, color }) {
 
 function EventCard({ event, onPlay, onDelete }) {
   const hasRecording = !!event.recording
+  const hasMaskVideo = !!event.recording?.mask_video_path
+  
   const thumbnailUrl = event.recording?.thumbnail_path 
     ? `${API_URL}/recordings/${event.recording.thumbnail_path.split('/').pop()}`
     : null
@@ -561,6 +565,14 @@ function EventCard({ event, onPlay, onDelete }) {
               <div className="w-12 h-12 rounded-full bg-purrple-500/90 flex items-center justify-center">
                 <Play className="w-6 h-6 ml-0.5" />
               </div>
+            </div>
+          )}
+          
+          {/* Mask video available badge */}
+          {hasMaskVideo && (
+            <div className="absolute top-2 right-2 px-2 py-0.5 bg-purrple-500/90 rounded text-xs text-white flex items-center gap-1">
+              <Crosshair className="w-3 h-3" />
+              Mask
             </div>
           )}
           
@@ -680,9 +692,14 @@ function EventCard({ event, onPlay, onDelete }) {
 }
 
 function EventDetailModal({ event, onClose }) {
+  const [showMaskVideo, setShowMaskVideo] = useState(false)
   const hasRecording = !!event.recording
+  const hasMaskVideo = !!event.recording?.mask_video_path
   const videoUrl = hasRecording 
     ? `${API_URL}/api/recordings/${event.recording.id}/video`
+    : null
+  const maskVideoUrl = hasMaskVideo
+    ? `${API_URL}/api/recordings/${event.recording.id}/mask-video`
     : null
   
   return (
@@ -702,8 +719,21 @@ function EventDetailModal({ event, onClose }) {
         </button>
         
         <div className="glass-card overflow-hidden">
-          {/* Video player */}
-          {videoUrl && (
+          {/* Video player - regular or mask video */}
+          {showMaskVideo && maskVideoUrl ? (
+            <div className="relative">
+              <video
+                src={maskVideoUrl}
+                controls
+                autoPlay
+                className="w-full"
+              />
+              <div className="absolute top-4 left-4 px-3 py-1.5 bg-purrple-500/90 rounded-lg text-sm font-medium">
+                <Crosshair className="w-4 h-4 inline mr-2" />
+                Detection Mask Video - SAM3 Analysis
+              </div>
+            </div>
+          ) : videoUrl && (
             <video
               src={videoUrl}
               controls
@@ -811,6 +841,27 @@ function EventDetailModal({ event, onClose }) {
                     {(event.recording.file_size_bytes / 1024 / 1024).toFixed(1)} MB
                   </span>
                 </div>
+                
+                {/* Mask video toggle button */}
+                {hasMaskVideo && (
+                  <div className="mt-4 flex items-center gap-4">
+                    <button
+                      onClick={() => setShowMaskVideo(!showMaskVideo)}
+                      className={clsx(
+                        'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all',
+                        showMaskVideo
+                          ? 'bg-purrple-500 text-white'
+                          : 'bg-midnight-700 text-gray-300 hover:bg-midnight-600'
+                      )}
+                    >
+                      <Crosshair className="w-4 h-4" />
+                      {showMaskVideo ? 'Show Original Video' : 'Show Detection Mask Video'}
+                    </button>
+                    <span className="text-sm text-gray-500">
+                      Watch with SAM3 detection masks overlaid
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -878,6 +929,8 @@ function EmptyState({ totalCount, viewMode, stats, onSwitchView }) {
 }
 
 function RecordingCard({ recording, onPlay, onDelete }) {
+  const hasMaskVideo = !!recording.mask_video_path
+  
   const thumbnailUrl = recording.thumbnail_path 
     ? `${API_URL}/recordings/${recording.thumbnail_path.split('/').pop()}`
     : null
@@ -907,6 +960,14 @@ function RecordingCard({ recording, onPlay, onDelete }) {
             <Play className="w-8 h-8 ml-1" />
           </div>
         </div>
+        
+        {/* Mask video available badge */}
+        {hasMaskVideo && (
+          <div className="absolute top-2 right-2 px-2 py-0.5 bg-purrple-500/90 rounded text-xs text-white flex items-center gap-1">
+            <Crosshair className="w-3 h-3" />
+            Mask
+          </div>
+        )}
         
         {/* Duration badge */}
         {recording.duration_seconds && (
@@ -968,7 +1029,12 @@ function RecordingCard({ recording, onPlay, onDelete }) {
 }
 
 function RecordingPlayerModal({ recording, onClose }) {
+  const [showMaskVideo, setShowMaskVideo] = useState(false)
+  const hasMaskVideo = !!recording.mask_video_path
   const videoUrl = `${API_URL}/api/recordings/${recording.id}/video`
+  const maskVideoUrl = hasMaskVideo
+    ? `${API_URL}/api/recordings/${recording.id}/mask-video`
+    : null
   
   return (
     <div 
@@ -986,18 +1052,49 @@ function RecordingPlayerModal({ recording, onClose }) {
           <X className="w-6 h-6" />
         </button>
         
-        <video
-          src={videoUrl}
-          controls
-          autoPlay
-          className="w-full rounded-xl shadow-2xl"
-        />
+        {showMaskVideo && maskVideoUrl ? (
+          <div className="relative">
+            <video
+              src={maskVideoUrl}
+              controls
+              autoPlay
+              className="w-full rounded-xl shadow-2xl"
+            />
+            <div className="absolute top-4 left-4 px-3 py-1.5 bg-purrple-500/90 rounded-lg text-sm font-medium">
+              <Crosshair className="w-4 h-4 inline mr-2" />
+              Detection Mask Video - SAM3 Analysis
+            </div>
+          </div>
+        ) : (
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            className="w-full rounded-xl shadow-2xl"
+          />
+        )}
         
         <div className="mt-4 text-center">
           <h3 className="font-bold text-lg">{recording.filename}</h3>
           <p className="text-gray-500">
             {format(parseISO(recording.started_at), 'PPpp')}
           </p>
+          
+          {/* Mask video toggle button */}
+          {hasMaskVideo && (
+            <button
+              onClick={() => setShowMaskVideo(!showMaskVideo)}
+              className={clsx(
+                'mt-4 flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all mx-auto',
+                showMaskVideo
+                  ? 'bg-purrple-500 text-white'
+                  : 'bg-midnight-700 text-gray-300 hover:bg-midnight-600'
+              )}
+            >
+              <Crosshair className="w-4 h-4" />
+              {showMaskVideo ? 'Show Original Video' : 'Show Detection Mask Video'}
+            </button>
+          )}
         </div>
       </div>
     </div>

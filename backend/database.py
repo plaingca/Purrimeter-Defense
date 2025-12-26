@@ -115,6 +115,8 @@ class Recording(Base):
     file_size_bytes = Column(Integer)
     
     thumbnail_path = Column(String)
+    mask_thumbnail_path = Column(String)  # Thumbnail showing detection mask overlay
+    mask_video_path = Column(String)  # Full video with detection masks overlaid on each frame
     
     started_at = Column(DateTime, nullable=False)
     ended_at = Column(DateTime)

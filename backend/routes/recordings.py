@@ -28,6 +28,8 @@ class RecordingResponse(BaseModel):
     duration_seconds: Optional[float]
     file_size_bytes: Optional[int]
     thumbnail_path: Optional[str]
+    mask_thumbnail_path: Optional[str]
+    mask_video_path: Optional[str]
     started_at: str
     ended_at: Optional[str]
     discord_sent: bool
@@ -65,6 +67,8 @@ async def list_recordings(
             duration_seconds=r.duration_seconds,
             file_size_bytes=r.file_size_bytes,
             thumbnail_path=r.thumbnail_path,
+            mask_thumbnail_path=r.mask_thumbnail_path,
+            mask_video_path=r.mask_video_path,
             started_at=r.started_at.isoformat(),
             ended_at=r.ended_at.isoformat() if r.ended_at else None,
             discord_sent=r.discord_sent,
@@ -92,6 +96,8 @@ async def get_recording(recording_id: str, db: AsyncSession = Depends(get_db)):
         duration_seconds=recording.duration_seconds,
         file_size_bytes=recording.file_size_bytes,
         thumbnail_path=recording.thumbnail_path,
+        mask_thumbnail_path=recording.mask_thumbnail_path,
+        mask_video_path=recording.mask_video_path,
         started_at=recording.started_at.isoformat(),
         ended_at=recording.ended_at.isoformat() if recording.ended_at else None,
         discord_sent=recording.discord_sent,
@@ -143,6 +149,53 @@ async def get_recording_thumbnail(recording_id: str, db: AsyncSession = Depends(
     )
 
 
+@router.get("/{recording_id}/mask-thumbnail")
+async def get_recording_mask_thumbnail(recording_id: str, db: AsyncSession = Depends(get_db)):
+    """Get a recording's mask thumbnail image showing what triggered the detection."""
+    result = await db.execute(select(Recording).where(Recording.id == recording_id))
+    recording = result.scalar_one_or_none()
+    
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    
+    if not recording.mask_thumbnail_path:
+        raise HTTPException(status_code=404, detail="Mask thumbnail not available")
+    
+    mask_thumbnail_path = Path(recording.mask_thumbnail_path)
+    
+    if not mask_thumbnail_path.exists():
+        raise HTTPException(status_code=404, detail="Mask thumbnail file not found")
+    
+    return FileResponse(
+        path=mask_thumbnail_path,
+        media_type="image/jpeg",
+    )
+
+
+@router.get("/{recording_id}/mask-video")
+async def get_recording_mask_video(recording_id: str, db: AsyncSession = Depends(get_db)):
+    """Get a recording's mask video with detection overlays on every frame."""
+    result = await db.execute(select(Recording).where(Recording.id == recording_id))
+    recording = result.scalar_one_or_none()
+    
+    if not recording:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    
+    if not recording.mask_video_path:
+        raise HTTPException(status_code=404, detail="Mask video not available - run mask video generation first")
+    
+    mask_video_path = Path(recording.mask_video_path)
+    
+    if not mask_video_path.exists():
+        raise HTTPException(status_code=404, detail="Mask video file not found")
+    
+    return FileResponse(
+        path=mask_video_path,
+        media_type="video/mp4",
+        filename=f"{recording.filename.replace('.mp4', '_mask.mp4')}",
+    )
+
+
 @router.delete("/{recording_id}")
 async def delete_recording(recording_id: str, db: AsyncSession = Depends(get_db)):
     """Delete a recording and its files."""
@@ -161,6 +214,16 @@ async def delete_recording(recording_id: str, db: AsyncSession = Depends(get_db)
         thumbnail_path = Path(recording.thumbnail_path)
         if thumbnail_path.exists():
             thumbnail_path.unlink()
+    
+    if recording.mask_thumbnail_path:
+        mask_thumbnail_path = Path(recording.mask_thumbnail_path)
+        if mask_thumbnail_path.exists():
+            mask_thumbnail_path.unlink()
+    
+    if recording.mask_video_path:
+        mask_video_path = Path(recording.mask_video_path)
+        if mask_video_path.exists():
+            mask_video_path.unlink()
     
     # Delete from database
     await db.delete(recording)

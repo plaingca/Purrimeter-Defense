@@ -9,6 +9,8 @@ from typing import Dict, List, Optional, Any
 import uuid
 import structlog
 from PIL import Image
+import numpy as np
+import cv2
 
 from backend.config import settings
 from backend.services.sam3_service import SAM3Service, Detection
@@ -31,6 +33,7 @@ class PipelineState:
     last_detection_time: Optional[datetime] = None
     last_detections: Dict[str, List[Detection]] = field(default_factory=dict)
     active_alerts: Dict[str, str] = field(default_factory=dict)  # alert_id -> recording_id
+    alert_mask_thumbnails: Dict[str, str] = field(default_factory=dict)  # alert_id -> mask_thumbnail_path
     processing_task: Optional[asyncio.Task] = None
 
 
@@ -284,6 +287,13 @@ class PipelineManager:
         if not pipeline:
             return
         
+        # Generate mask thumbnail with current detections
+        mask_thumbnail_path = await self._generate_mask_thumbnail(
+            pipeline, alert_id, rule
+        )
+        if mask_thumbnail_path:
+            pipeline.alert_mask_thumbnails[alert_id] = mask_thumbnail_path
+        
         # Save alert to database
         try:
             async with AsyncSessionLocal() as session:
@@ -358,6 +368,7 @@ class PipelineManager:
         
         # Stop recording
         recording_id = pipeline.active_alerts.pop(alert_id, None)
+        mask_thumbnail_path = pipeline.alert_mask_thumbnails.pop(alert_id, None)
         discord_sent = False
         
         if recording_id:
@@ -396,13 +407,14 @@ class PipelineManager:
                                 duration_seconds=recording_info.get("duration_seconds"),
                                 file_size_bytes=recording_info.get("file_size_bytes"),
                                 thumbnail_path=recording_info.get("thumbnail_path"),
+                                mask_thumbnail_path=mask_thumbnail_path,
                                 started_at=datetime.fromisoformat(recording_info.get("started_at", datetime.utcnow().isoformat())),
                                 ended_at=datetime.fromisoformat(recording_info.get("ended_at", datetime.utcnow().isoformat())),
                                 discord_sent=discord_sent,
                             )
                             session.add(recording)
                             await session.commit()
-                            logger.info("Recording saved to database", recording_id=recording_id)
+                            logger.info("Recording saved to database", recording_id=recording_id, mask_thumbnail=mask_thumbnail_path)
                     except Exception as e:
                         logger.error("Failed to save recording to database", error=str(e))
                     
@@ -435,6 +447,126 @@ class PipelineManager:
                         action_type=result.action_type,
                         error=result.error,
                     )
+    
+    async def _generate_mask_thumbnail(
+        self,
+        pipeline: PipelineState,
+        alert_id: str,
+        rule: Rule,
+    ) -> Optional[str]:
+        """
+        Generate a thumbnail image with detection mask overlay.
+        
+        This creates an image showing exactly what triggered the detection,
+        useful for debugging false positives.
+        """
+        try:
+            # Get current frame
+            current_frame = pipeline.camera_stream.get_current_frame()
+            if not current_frame:
+                logger.warning("No current frame available for mask thumbnail")
+                return None
+            
+            frame = current_frame.frame.copy()
+            height, width = frame.shape[:2]
+            
+            # Get relevant detections for this rule
+            primary_detections = pipeline.last_detections.get(rule.primary_target, [])
+            secondary_detections = pipeline.last_detections.get(rule.secondary_target, []) if rule.secondary_target else []
+            
+            # Color scheme: primary target in red/orange, secondary in blue
+            primary_color = (0, 100, 255)  # Orange-red in BGR
+            secondary_color = (255, 150, 0)  # Blue in BGR
+            
+            # Create mask overlay
+            overlay = frame.copy()
+            
+            # Draw primary target masks and bounding boxes
+            for detection in primary_detections:
+                # Draw mask if available
+                if detection.mask is not None and detection.mask.size > 0:
+                    mask = detection.mask
+                    # Resize mask to frame size if needed
+                    if mask.shape[:2] != (height, width):
+                        mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+                    
+                    # Apply colored mask overlay
+                    mask_bool = mask > 0
+                    overlay[mask_bool] = cv2.addWeighted(
+                        overlay[mask_bool], 0.5,
+                        np.full_like(overlay[mask_bool], primary_color), 0.5, 0
+                    )
+                
+                # Draw bounding box
+                x1, y1, x2, y2 = detection.bbox
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), primary_color, 2)
+                
+                # Draw label with confidence
+                label = f"{detection.label}: {detection.confidence:.0%}"
+                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.rectangle(overlay, (x1, y1 - label_size[1] - 10), (x1 + label_size[0] + 10, y1), primary_color, -1)
+                cv2.putText(overlay, label, (x1 + 5, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Draw secondary target masks and bounding boxes (if spatial rule)
+            for detection in secondary_detections:
+                # Draw mask if available
+                if detection.mask is not None and detection.mask.size > 0:
+                    mask = detection.mask
+                    if mask.shape[:2] != (height, width):
+                        mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+                    
+                    mask_bool = mask > 0
+                    overlay[mask_bool] = cv2.addWeighted(
+                        overlay[mask_bool], 0.5,
+                        np.full_like(overlay[mask_bool], secondary_color), 0.5, 0
+                    )
+                
+                # Draw bounding box
+                x1, y1, x2, y2 = detection.bbox
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), secondary_color, 2)
+                
+                # Draw label
+                label = f"{detection.label}: {detection.confidence:.0%}"
+                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.rectangle(overlay, (x1, y2), (x1 + label_size[0] + 10, y2 + label_size[1] + 10), secondary_color, -1)
+                cv2.putText(overlay, label, (x1 + 5, y2 + label_size[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Blend overlay with original frame
+            result = cv2.addWeighted(frame, 0.3, overlay, 0.7, 0)
+            
+            # Add rule name and timestamp
+            timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            cv2.putText(result, f"Rule: {rule.name}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(result, timestamp, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+            
+            # Add detection summary
+            summary = f"Detected: {rule.primary_target}"
+            if rule.secondary_target:
+                summary += f" over {rule.secondary_target}"
+            cv2.putText(result, summary, (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            
+            # Save thumbnail
+            timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            filename = f"{pipeline.camera_id}_{timestamp_str}_{alert_id[:8]}_mask.jpg"
+            filepath = settings.RECORDINGS_PATH / filename
+            
+            cv2.imwrite(str(filepath), result)
+            
+            logger.info(
+                "Mask thumbnail generated",
+                alert_id=alert_id,
+                filepath=str(filepath),
+                primary_count=len(primary_detections),
+                secondary_count=len(secondary_detections),
+            )
+            
+            return str(filepath)
+            
+        except Exception as e:
+            logger.error("Failed to generate mask thumbnail", error=str(e))
+            import traceback
+            traceback.print_exc()
+            return None
     
     def get_pipeline_status(self, camera_id: str) -> Optional[Dict[str, Any]]:
         """Get status of a camera pipeline."""

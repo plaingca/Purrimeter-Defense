@@ -42,6 +42,7 @@ export default function Recordings() {
   const [page, setPage] = useState(0)
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [selectedRecording, setSelectedRecording] = useState(null)
+  const [maskGenStatus, setMaskGenStatus] = useState(null)
   
   // View mode: 'events' or 'recordings'
   const [viewMode, setViewMode] = useState('events')
@@ -64,7 +65,18 @@ export default function Recordings() {
     fetchRecordings()
     fetchStats()
     fetchDailySummary()
+    fetchMaskGenStatus()
   }, [page, dateRange, selectedCamera, selectedRule, viewMode])
+  
+  // Poll mask generation status every 5 seconds if there's pending work
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (maskGenStatus && maskGenStatus.pending > 0) {
+        fetchMaskGenStatus()
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [maskGenStatus])
   
   const fetchEvents = async () => {
     if (viewMode !== 'events') return
@@ -133,6 +145,16 @@ export default function Recordings() {
       setDailySummary(data.summary || [])
     } catch (error) {
       console.error('Failed to fetch daily summary:', error)
+    }
+  }
+  
+  const fetchMaskGenStatus = async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/recordings/mask-generation/status`)
+      const data = await response.json()
+      setMaskGenStatus(data)
+    } catch (error) {
+      console.error('Failed to fetch mask generation status:', error)
     }
   }
   
@@ -285,6 +307,11 @@ export default function Recordings() {
           color="green"
         />
       </div>
+      
+      {/* Mask Generation Status */}
+      {maskGenStatus && (maskGenStatus.pending > 0 || maskGenStatus.active_tasks_count > 0) && (
+        <MaskGenerationStatus status={maskGenStatus} />
+      )}
       
       {/* Activity Chart */}
       {dailySummary.length > 0 && (
@@ -520,6 +547,93 @@ function StatCard({ icon: Icon, label, value, color }) {
         <div className="text-2xl font-bold">{value}</div>
         <div className="text-sm text-gray-500">{label}</div>
       </div>
+    </div>
+  )
+}
+
+function MaskGenerationStatus({ status }) {
+  const isProcessing = status.active_tasks_count > 0 || status.currently_processing || status.is_batch_running
+  const currentVideo = status.currently_processing
+  
+  return (
+    <div className="glass-card p-4 border-l-4 border-purrple-500">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-3">
+          <div className={clsx(
+            'w-10 h-10 rounded-lg flex items-center justify-center',
+            isProcessing ? 'bg-purrple-500/20' : 'bg-alert-green/20'
+          )}>
+            <Crosshair className={clsx(
+              'w-5 h-5',
+              isProcessing ? 'text-purrple-400 animate-pulse' : 'text-alert-green'
+            )} />
+          </div>
+          <div>
+            <h3 className="font-semibold">Mask Video Generation</h3>
+            <p className="text-sm text-gray-500">
+              {isProcessing ? 'Processing detection mask videos...' : 'All mask videos generated'}
+            </p>
+          </div>
+        </div>
+        
+        <div className="text-right">
+          <div className="text-2xl font-bold text-purrple-400">
+            {status.percent_complete}%
+          </div>
+          <div className="text-sm text-gray-500">
+            {status.with_mask_videos} / {status.total_recordings}
+          </div>
+        </div>
+      </div>
+      
+      {/* Overall progress bar */}
+      <div className="h-2 bg-midnight-800 rounded-full overflow-hidden mb-3">
+        <div 
+          className="h-full bg-gradient-to-r from-purrple-600 to-purrple-400 transition-all duration-500"
+          style={{ width: `${status.percent_complete}%` }}
+        />
+      </div>
+      
+      {/* Currently processing video */}
+      {currentVideo && currentVideo.filename && (
+        <div className="bg-midnight-800/50 rounded-lg p-3 mb-2">
+          <div className="flex items-center gap-2 text-sm mb-2">
+            <div className="w-2 h-2 rounded-full bg-purrple-400 animate-pulse" />
+            <span className="text-gray-400">Processing:</span>
+            <span className="text-white font-medium truncate flex-1">
+              {currentVideo.filename}
+            </span>
+            {currentVideo.batch_current && currentVideo.batch_total && (
+              <span className="text-gray-500">
+                ({currentVideo.batch_current}/{currentVideo.batch_total})
+              </span>
+            )}
+          </div>
+          
+          {/* Video frame progress */}
+          {currentVideo.total_frames > 0 && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>Frame {currentVideo.current_frame} / {currentVideo.total_frames}</span>
+                <span>{currentVideo.percent_video}%</span>
+              </div>
+              <div className="h-1.5 bg-midnight-700 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-catblue-500 to-catblue-400 transition-all duration-300"
+                  style={{ width: `${currentVideo.percent_video}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Pending count */}
+      {status.pending > 0 && !currentVideo && (
+        <div className="text-sm text-gray-500">
+          {status.pending} recording{status.pending !== 1 ? 's' : ''} pending mask generation
+        </div>
+      )}
     </div>
   )
 }

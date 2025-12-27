@@ -12,6 +12,7 @@ import structlog
 from backend.database import Rule, RuleConditionType, Alert, AlertState
 from backend.services.sam3_service import SAM3Service, Detection
 from backend.config import settings
+from backend.utils import to_utc_isoformat
 
 logger = structlog.get_logger()
 
@@ -363,7 +364,7 @@ class RuleEngine:
                 "rule_name": state.rule.name,
                 "is_in_alert": state.is_in_alert,
                 "current_alert_id": state.current_alert_id,
-                "last_triggered": state.last_triggered.isoformat() if state.last_triggered else None,
+                "last_triggered": to_utc_isoformat(state.last_triggered),
                 "consecutive_detections": state.consecutive_detections,
             }
             for rule_id, state in self._rule_states.items()

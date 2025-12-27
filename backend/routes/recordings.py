@@ -6,7 +6,7 @@ from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import Recording, get_db
 from backend.config import settings
+from backend.utils import to_utc_isoformat
 
 router = APIRouter()
 
@@ -69,10 +70,10 @@ async def list_recordings(
             thumbnail_path=r.thumbnail_path,
             mask_thumbnail_path=r.mask_thumbnail_path,
             mask_video_path=r.mask_video_path,
-            started_at=r.started_at.isoformat(),
-            ended_at=r.ended_at.isoformat() if r.ended_at else None,
+            started_at=to_utc_isoformat(r.started_at),
+            ended_at=to_utc_isoformat(r.ended_at),
             discord_sent=r.discord_sent,
-            created_at=r.created_at.isoformat(),
+            created_at=to_utc_isoformat(r.created_at),
         )
         for r in recordings
     ]
@@ -98,10 +99,10 @@ async def get_recording(recording_id: str, db: AsyncSession = Depends(get_db)):
         thumbnail_path=recording.thumbnail_path,
         mask_thumbnail_path=recording.mask_thumbnail_path,
         mask_video_path=recording.mask_video_path,
-        started_at=recording.started_at.isoformat(),
-        ended_at=recording.ended_at.isoformat() if recording.ended_at else None,
+        started_at=to_utc_isoformat(recording.started_at),
+        ended_at=to_utc_isoformat(recording.ended_at),
         discord_sent=recording.discord_sent,
-        created_at=recording.created_at.isoformat(),
+        created_at=to_utc_isoformat(recording.created_at),
     )
 
 
@@ -257,5 +258,101 @@ async def get_recording_stats(
         "total_duration_seconds": float(row.total_duration or 0),
         "total_size_bytes": int(row.total_size or 0),
         "total_size_mb": round((row.total_size or 0) / (1024 * 1024), 2),
+    }
+
+
+@router.get("/mask-generation/status")
+async def get_mask_generation_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get mask video generation status for all recordings."""
+    from sqlalchemy import func
+    import json
+    
+    # Get counts
+    total_query = select(func.count(Recording.id))
+    with_mask_query = select(func.count(Recording.id)).where(Recording.mask_video_path != None)
+    
+    total_result = await db.execute(total_query)
+    with_mask_result = await db.execute(with_mask_query)
+    
+    total_recordings = total_result.scalar() or 0
+    with_mask_videos = with_mask_result.scalar() or 0
+    pending = total_recordings - with_mask_videos
+    
+    # Get list of recordings pending mask generation
+    pending_query = (
+        select(Recording.id, Recording.filename, Recording.duration_seconds)
+        .where(Recording.mask_video_path == None)
+        .order_by(Recording.created_at.desc())
+        .limit(10)
+    )
+    pending_result = await db.execute(pending_query)
+    pending_recordings = [
+        {
+            "id": r.id,
+            "filename": r.filename,
+            "duration_seconds": r.duration_seconds,
+        }
+        for r in pending_result.all()
+    ]
+    
+    # Check for batch processing progress file
+    batch_progress = None
+    progress_file = settings.RECORDINGS_PATH / "mask_generation_progress.json"
+    try:
+        if progress_file.exists():
+            with open(progress_file, 'r') as f:
+                batch_progress = json.load(f)
+    except Exception:
+        pass
+    
+    # Check if pipeline manager has any active mask generation tasks
+    currently_processing = None
+    active_tasks = []
+    
+    try:
+        pipeline_manager = request.app.state.pipeline_manager
+        if hasattr(pipeline_manager, '_mask_video_tasks'):
+            active_tasks = list(pipeline_manager._mask_video_tasks.keys())
+            if active_tasks:
+                # Get details for the first active task
+                recording_id = active_tasks[0]
+                rec_result = await db.execute(
+                    select(Recording).where(Recording.id == recording_id)
+                )
+                rec = rec_result.scalar_one_or_none()
+                if rec:
+                    currently_processing = {
+                        "recording_id": recording_id,
+                        "filename": rec.filename,
+                        "duration_seconds": rec.duration_seconds,
+                    }
+    except Exception:
+        pass
+    
+    # Use batch progress if available and no pipeline task is active
+    if batch_progress and not currently_processing:
+        currently_processing = {
+            "filename": batch_progress.get("current_filename"),
+            "current_frame": batch_progress.get("current_frame", 0),
+            "total_frames": batch_progress.get("total_frames", 0),
+            "percent_video": batch_progress.get("percent_video", 0),
+            "batch_current": batch_progress.get("current_recording", 0),
+            "batch_total": batch_progress.get("total_recordings", 0),
+        }
+    
+    is_batch_running = batch_progress is not None and batch_progress.get("status") == "processing"
+    
+    return {
+        "total_recordings": total_recordings,
+        "with_mask_videos": with_mask_videos,
+        "pending": pending,
+        "percent_complete": round(100 * with_mask_videos / total_recordings, 1) if total_recordings > 0 else 100,
+        "currently_processing": currently_processing,
+        "active_tasks_count": len(active_tasks),
+        "is_batch_running": is_batch_running,
+        "pending_recordings": pending_recordings,
     }
 

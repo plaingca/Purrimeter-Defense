@@ -18,6 +18,7 @@ from backend.database import init_db, get_all_cameras, get_rules_for_camera
 from backend.routes import cameras, rules, recordings, alerts, streams, actions, detection
 from backend.services.pipeline_manager import PipelineManager
 from backend.services.sam3_service import SAM3Service
+from backend.utils import to_utc_isoformat, utc_now
 
 logger = structlog.get_logger()
 
@@ -107,7 +108,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "Purrimeter Defense",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": to_utc_isoformat(utc_now()),
         "emoji": "🐱",
     }
 

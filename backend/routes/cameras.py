@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import Camera, get_db
+from backend.utils import to_utc_isoformat
 
 router = APIRouter()
 
@@ -66,8 +67,8 @@ async def list_cameras(db: AsyncSession = Depends(get_db)):
             width=c.width,
             height=c.height,
             enabled=c.enabled,
-            created_at=c.created_at.isoformat(),
-            updated_at=c.updated_at.isoformat(),
+            created_at=to_utc_isoformat(c.created_at),
+            updated_at=to_utc_isoformat(c.updated_at),
         )
         for c in cameras
     ]
@@ -109,8 +110,8 @@ async def create_camera(
         width=db_camera.width,
         height=db_camera.height,
         enabled=db_camera.enabled,
-        created_at=db_camera.created_at.isoformat(),
-        updated_at=db_camera.updated_at.isoformat(),
+        created_at=to_utc_isoformat(db_camera.created_at),
+        updated_at=to_utc_isoformat(db_camera.updated_at),
     )
 
 
@@ -131,8 +132,8 @@ async def get_camera(camera_id: str, db: AsyncSession = Depends(get_db)):
         width=camera.width,
         height=camera.height,
         enabled=camera.enabled,
-        created_at=camera.created_at.isoformat(),
-        updated_at=camera.updated_at.isoformat(),
+        created_at=to_utc_isoformat(camera.created_at),
+        updated_at=to_utc_isoformat(camera.updated_at),
     )
 
 
@@ -181,8 +182,8 @@ async def update_camera(
         width=camera.width,
         height=camera.height,
         enabled=camera.enabled,
-        created_at=camera.created_at.isoformat(),
-        updated_at=camera.updated_at.isoformat(),
+        created_at=to_utc_isoformat(camera.created_at),
+        updated_at=to_utc_isoformat(camera.updated_at),
     )
 
 

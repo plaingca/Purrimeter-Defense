@@ -11,6 +11,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import Alert, AlertState, get_db
+from backend.utils import to_utc_isoformat
 
 router = APIRouter()
 
@@ -64,8 +65,8 @@ async def list_alerts(
             message=a.message,
             detected_objects=a.detected_objects or [],
             detection_confidence=a.detection_confidence,
-            triggered_at=a.triggered_at.isoformat(),
-            ended_at=a.ended_at.isoformat() if a.ended_at else None,
+            triggered_at=to_utc_isoformat(a.triggered_at),
+            ended_at=to_utc_isoformat(a.ended_at),
         )
         for a in alerts
     ]
@@ -150,8 +151,8 @@ async def get_alert_timeline(
             "id": alert.id,
             "camera_id": alert.camera_id,
             "rule_id": alert.rule_id,
-            "triggered_at": alert.triggered_at.isoformat(),
-            "ended_at": alert.ended_at.isoformat() if alert.ended_at else None,
+            "triggered_at": to_utc_isoformat(alert.triggered_at),
+            "ended_at": to_utc_isoformat(alert.ended_at),
             "duration_seconds": (
                 (alert.ended_at - alert.triggered_at).total_seconds()
                 if alert.ended_at else None
@@ -160,7 +161,7 @@ async def get_alert_timeline(
     
     return {
         "hours": hours,
-        "since": since.isoformat(),
+        "since": to_utc_isoformat(since),
         "alerts": timeline,
     }
 
@@ -245,8 +246,8 @@ async def get_detection_events(
             "message": alert.message,
             "detected_objects": alert.detected_objects or [],
             "detection_confidence": alert.detection_confidence,
-            "triggered_at": alert.triggered_at.isoformat(),
-            "ended_at": alert.ended_at.isoformat() if alert.ended_at else None,
+            "triggered_at": to_utc_isoformat(alert.triggered_at),
+            "ended_at": to_utc_isoformat(alert.ended_at),
             "duration_seconds": (
                 (alert.ended_at - alert.triggered_at).total_seconds()
                 if alert.ended_at else None
@@ -276,8 +277,8 @@ async def get_detection_events(
         "total_count": total_count,
         "limit": limit,
         "offset": offset,
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
+        "date_from": to_utc_isoformat(date_from),
+        "date_to": to_utc_isoformat(date_to),
     }
 
 
@@ -323,7 +324,7 @@ async def get_daily_event_summary(
     
     return {
         "days": days,
-        "since": since.isoformat(),
+        "since": to_utc_isoformat(since),
         "summary": [{"date": k, "count": v} for k, v in summary.items()],
     }
 
@@ -346,6 +347,6 @@ async def get_alert(alert_id: str, db: AsyncSession = Depends(get_db)):
         message=alert.message,
         detected_objects=alert.detected_objects or [],
         detection_confidence=alert.detection_confidence,
-        triggered_at=alert.triggered_at.isoformat(),
-        ended_at=alert.ended_at.isoformat() if alert.ended_at else None,
+        triggered_at=to_utc_isoformat(alert.triggered_at),
+        ended_at=to_utc_isoformat(alert.ended_at),
     )

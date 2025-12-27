@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import Rule, RuleConditionType, Camera, get_db
+from backend.utils import to_utc_isoformat
 
 router = APIRouter()
 
@@ -118,8 +119,8 @@ def rule_to_response(rule: Rule) -> RuleResponse:
         on_alert_start_actions=rule.on_alert_start_actions or [],
         on_alert_end_actions=rule.on_alert_end_actions or [],
         enabled=rule.enabled,
-        created_at=rule.created_at.isoformat(),
-        updated_at=rule.updated_at.isoformat(),
+        created_at=to_utc_isoformat(rule.created_at),
+        updated_at=to_utc_isoformat(rule.updated_at),
     )
 
 

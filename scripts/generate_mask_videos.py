@@ -13,6 +13,7 @@ import asyncio
 import argparse
 import sys
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,45 @@ from backend.services.sam3_service import SAM3Service
 from backend.services.mask_video_service import MaskVideoService
 
 import structlog
+
+# Progress file for UI tracking
+PROGRESS_FILE = settings.RECORDINGS_PATH / "mask_generation_progress.json"
+
+
+def write_progress(
+    current_recording: int,
+    total_recordings: int,
+    current_filename: str = None,
+    current_frame: int = 0,
+    total_frames: int = 0,
+    status: str = "processing",
+):
+    """Write progress to file for UI tracking."""
+    try:
+        progress = {
+            "status": status,
+            "current_recording": current_recording,
+            "total_recordings": total_recordings,
+            "current_filename": current_filename,
+            "current_frame": current_frame,
+            "total_frames": total_frames,
+            "percent_video": round(100 * current_frame / total_frames, 1) if total_frames > 0 else 0,
+            "percent_overall": round(100 * (current_recording - 1 + (current_frame / total_frames if total_frames > 0 else 0)) / total_recordings, 1) if total_recordings > 0 else 0,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump(progress, f)
+    except Exception:
+        pass
+
+
+def clear_progress():
+    """Clear the progress file when done."""
+    try:
+        if PROGRESS_FILE.exists():
+            PROGRESS_FILE.unlink()
+    except Exception:
+        pass
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
@@ -124,7 +164,14 @@ async def process_recording(
         secondary=recording["secondary_target"],
     )
     
+    # Write initial progress
+    write_progress(index, total, recording["filename"], 0, 0, "processing")
+    
     start_time = datetime.now()
+    
+    # Progress callback to update the progress file
+    def progress_callback(current_frame, total_frames):
+        write_progress(index, total, recording["filename"], current_frame, total_frames, "processing")
     
     result = await mask_service.generate_mask_video(
         video_path=video_path,
@@ -132,6 +179,7 @@ async def process_recording(
         primary_target=recording["primary_target"],
         secondary_target=recording["secondary_target"],
         rule_name=recording["rule_name"],
+        progress_callback=progress_callback,
     )
     
     elapsed = (datetime.now() - start_time).total_seconds()
@@ -198,6 +246,9 @@ async def main(recording_id: str = None, limit: int = None):
             error_count += 1
     
     total_elapsed = (datetime.now() - total_start).total_seconds()
+    
+    # Clear progress file
+    clear_progress()
     
     print()
     print("=" * 70)

@@ -18,7 +18,9 @@ from backend.services.camera_stream import CameraStream, TimestampedFrame
 from backend.services.recording_service import RecordingService
 from backend.services.rule_engine import RuleEngine, RuleEvaluation
 from backend.services.action_service import ActionService
+from backend.services.mask_video_service import MaskVideoService
 from backend.database import Rule, Camera, Alert, AlertState, Recording, AsyncSessionLocal
+from backend.utils import to_utc_isoformat, from_utc_isoformat, utc_now
 
 logger = structlog.get_logger()
 
@@ -54,10 +56,12 @@ class PipelineManager:
         self.recording_service = RecordingService()
         self.action_service = ActionService()
         self.rule_engine = RuleEngine(sam3_service)
+        self.mask_video_service = MaskVideoService(sam3_service)
         
         self._pipelines: Dict[str, PipelineState] = {}
         self._lock = asyncio.Lock()
         self._running = False
+        self._mask_video_tasks: Dict[str, asyncio.Task] = {}  # Track background mask video generation
         
         # Wire up alert callbacks
         self.rule_engine.on_alert(self._on_alert_triggered)
@@ -408,13 +412,23 @@ class PipelineManager:
                                 file_size_bytes=recording_info.get("file_size_bytes"),
                                 thumbnail_path=recording_info.get("thumbnail_path"),
                                 mask_thumbnail_path=mask_thumbnail_path,
-                                started_at=datetime.fromisoformat(recording_info.get("started_at", datetime.utcnow().isoformat())),
-                                ended_at=datetime.fromisoformat(recording_info.get("ended_at", datetime.utcnow().isoformat())),
+                                started_at=from_utc_isoformat(recording_info.get("started_at")) or utc_now(),
+                                ended_at=from_utc_isoformat(recording_info.get("ended_at")) or utc_now(),
                                 discord_sent=discord_sent,
                             )
                             session.add(recording)
                             await session.commit()
                             logger.info("Recording saved to database", recording_id=recording_id, mask_thumbnail=mask_thumbnail_path)
+                        
+                        # Start background mask video generation
+                        self._start_mask_video_generation(
+                            recording_id=recording_id,
+                            filepath=recording_info.get("filepath", ""),
+                            primary_target=rule.primary_target,
+                            secondary_target=rule.secondary_target,
+                            rule_name=rule.name,
+                        )
+                        
                     except Exception as e:
                         logger.error("Failed to save recording to database", error=str(e))
                     
@@ -568,6 +582,73 @@ class PipelineManager:
             traceback.print_exc()
             return None
     
+    def _start_mask_video_generation(
+        self,
+        recording_id: str,
+        filepath: str,
+        primary_target: str,
+        secondary_target: Optional[str],
+        rule_name: str,
+    ):
+        """Start background task to generate mask video for a recording."""
+        from pathlib import Path
+        
+        video_path = Path(filepath)
+        if not video_path.exists():
+            logger.warning("Video file not found for mask generation", filepath=filepath)
+            return
+        
+        output_path = video_path.with_stem(video_path.stem + "_mask")
+        
+        async def generate_mask_video():
+            try:
+                logger.info(
+                    "Starting background mask video generation",
+                    recording_id=recording_id,
+                    filepath=filepath,
+                )
+                
+                result = await self.mask_video_service.generate_mask_video(
+                    video_path=video_path,
+                    output_path=output_path,
+                    primary_target=primary_target,
+                    secondary_target=secondary_target,
+                    rule_name=rule_name,
+                )
+                
+                if result:
+                    # Update recording in database with mask video path
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            from sqlalchemy import select
+                            db_result = await session.execute(
+                                select(Recording).where(Recording.id == recording_id)
+                            )
+                            recording = db_result.scalar_one_or_none()
+                            if recording:
+                                recording.mask_video_path = result
+                                await session.commit()
+                                logger.info(
+                                    "Mask video saved to database",
+                                    recording_id=recording_id,
+                                    mask_video_path=result,
+                                )
+                    except Exception as e:
+                        logger.error("Failed to update recording with mask video path", error=str(e))
+                else:
+                    logger.error("Mask video generation failed", recording_id=recording_id)
+                    
+            except Exception as e:
+                logger.error("Background mask video generation error", error=str(e))
+            finally:
+                # Clean up task reference
+                self._mask_video_tasks.pop(recording_id, None)
+        
+        # Create and store the background task
+        task = asyncio.create_task(generate_mask_video())
+        self._mask_video_tasks[recording_id] = task
+        logger.info("Background mask video generation task started", recording_id=recording_id)
+    
     def get_pipeline_status(self, camera_id: str) -> Optional[Dict[str, Any]]:
         """Get status of a camera pipeline."""
         pipeline = self._pipelines.get(camera_id)
@@ -581,10 +662,7 @@ class PipelineManager:
             "stream_status": pipeline.camera_stream.status.value,
             "reconnect_attempts": pipeline.camera_stream.reconnect_attempts,
             "frame_count": pipeline.camera_stream.frame_count,
-            "last_detection_time": (
-                pipeline.last_detection_time.isoformat()
-                if pipeline.last_detection_time else None
-            ),
+            "last_detection_time": to_utc_isoformat(pipeline.last_detection_time),
             "rules_count": len(pipeline.rules),
             "active_alerts": list(pipeline.active_alerts.keys()),
         }

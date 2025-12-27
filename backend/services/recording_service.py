@@ -21,6 +21,7 @@ import numpy as np
 
 from backend.config import settings
 from backend.services.camera_stream import CameraStream, TimestampedFrame
+from backend.utils import to_utc_isoformat
 
 logger = structlog.get_logger()
 
@@ -412,8 +413,8 @@ class RecordingService:
             "duration_seconds": duration,
             "file_size_bytes": file_size,
             "frame_count": recording.frame_count,
-            "started_at": recording.started_at.isoformat(),
-            "ended_at": ended_at.isoformat(),
+            "started_at": to_utc_isoformat(recording.started_at),
+            "ended_at": to_utc_isoformat(ended_at),
             "thumbnail_path": str(thumbnail_path) if thumbnail_path else None,
             "has_audio": recording.use_audio,
         }
@@ -673,7 +674,7 @@ class RecordingService:
                 "recording_id": r.recording_id,
                 "camera_id": r.camera_id,
                 "alert_id": r.alert_id,
-                "started_at": r.started_at.isoformat(),
+                "started_at": to_utc_isoformat(r.started_at),
                 "frame_count": r.frame_count,
                 "duration": (datetime.utcnow() - r.started_at).total_seconds(),
             }
